@@ -1,0 +1,78 @@
+#!/usr/bin/env ruby
+require 'json'
+require 'websocket-eventmachine-client'
+
+$messages_to_send = []
+$connected = false
+
+def format_json(json)
+  output = JSON.pretty_generate(JSON.parse(json))
+  output.gsub!(/(\".+\")\:/) { "\e[35m#{$1}\e[0m:" }
+  output.gsub!(/(\s\".+\")([\,\n])/) { "\e[36m#{$1}\e[0m#{$2}" }
+  output.gsub!(/(\s[\d\.]+)([\,\n])/) { "\e[32m#{$1}\e[0m#{$2}" }
+  output.gsub!(/(\snull)([\,\n])/) { "\e[33m#{$1}\e[0m#{$2}" }
+  output
+end
+
+Thread.new do
+  begin
+    EM.run do
+      ws = WebSocket::EventMachine::Client.connect(:uri => ARGV[0])
+      ws.onopen do
+        $connected = true
+        puts "\e[32m** Connected to #{ARGV[0]}\e[0m"
+      end
+
+      ws.onmessage do |msg, type|
+        puts format_json(msg)
+      end
+
+      ws.onclose do |code, reason|
+        puts "Disconnected with status code: #{code} - #{reason}"
+        Process.exit(1)
+      end
+
+      Thread.new do
+        while true do
+          if msg = $messages_to_send.shift
+            ws.send(msg)
+          end
+        end
+      end
+    end
+  rescue => e
+    puts "Error: #{e.class} #{e.message}"
+    puts e.backtrace
+  end
+end
+
+
+while true do
+  message = STDIN.gets
+  action, payload = message.split(/\s+/, 2)
+
+  if action =~ /\A([A-Za-z0-9]+)\[(\w+)\]\z/
+    action = $1
+    tag = $2
+  else
+    tag = nil
+  end
+
+  if payload.is_a?(String) && payload.length > 0
+    begin
+      actual_payload = JSON.parse(payload)
+    rescue => e
+      actual_payload = {}
+      items = payload.split(/\s+/)
+      items.each do |item|
+        key, value = item.split('=', 2)
+        actual_payload[key] = value
+      end
+    end
+  else
+    actual_payload = {}
+  end
+
+  message = {:action => action, :tag => tag, :payload => actual_payload}.to_json
+  $messages_to_send << message
+end
